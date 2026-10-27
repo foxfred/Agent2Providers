@@ -1,116 +1,104 @@
 # Agent2Providers
 
-**English** · [简体中文](README.zh-CN.md)
+[English](README.md) · **简体中文**
 
-Each provider here signs in to one subscription and makes its requests. The
-gateway loads the plugin as a separate process, so a fault in one provider
-takes down that process and nothing else.
+这里的每个提供商负责登录一个订阅，并发出对应的请求。网关把插件作为独立进程
+加载，因此某个提供商出故障只会让那个进程挂掉，不会影响其他部分。
 
-This repository also carries the two crates the gateway compiles against:
-`agent2api-provider-protocol` (the wire types) and `agent2api-provider-sdk`
-(the `Provider` trait and its serve loop). The gateway depends on this
-repository by tag.
+本仓库同时承载网关编译时所依赖的两个 crate：`agent2api-provider-protocol`
+（线上类型）和 `agent2api-provider-sdk`（`Provider` trait 及其 serve 循环）。
+网关通过 tag 引用本仓库。
 
-## Building
+## 构建
 
 ```bash
-cargo build --release            # current platform
-node scripts/pack.mjs            # produce an installable zip (runs the build above)
+cargo build --release            # 当前平台
+node scripts/pack.mjs            # 生成可安装的 zip（会先执行上面的构建）
 ```
 
-The zip lands in `dist/agent2api-providers-<version>-<target>.zip`.
+zip 输出到 `dist/agent2api-providers-<version>-<target>.zip`。
 
-To build for another target, prepare the toolchain yourself and name it:
+要构建到其他目标平台，需自行准备工具链并指定目标：
 
 ```bash
 cargo build --release --target aarch64-unknown-linux-gnu
 node scripts/pack.mjs --skip-build --target aarch64-unknown-linux-gnu
 ```
 
-The script only turns an already-built binary into a zip. It does no cross
-compilation — that needs mingw / osxcross / musl toolchains, and folding them
-in would add a branch that can only fail. Multiple platforms are the CI
-matrix's job (`.github/workflows/build.yml`, one job per platform).
+该脚本只负责把一个已经构建好的二进制打成 zip，不做交叉编译 —— 那需要
+mingw / osxcross / musl 工具链，把它塞进来只会多出一个注定失败的分支。
+多平台构建是 CI 矩阵的职责（`.github/workflows/build.yml`，每个平台一个 job）。
 
-## Every platform needs its own package
+## 每个平台都需要自己的包
 
-A plugin is a native executable that the gateway starts directly, so each
-OS-and-architecture pair needs its own binary. `pack.json` declares five:
+插件是网关直接启动的原生可执行文件，因此每个操作系统与架构的组合都需要
+各自的二进制。`pack.json` 声明了五种：
 
-| Target triple | Covers |
+| 目标三元组 | 覆盖范围 |
 |---|---|
-| `x86_64-pc-windows-msvc` | Windows desktop (x64) |
-| `x86_64-apple-darwin` | macOS on Intel |
-| `aarch64-apple-darwin` | macOS on Apple Silicon |
-| `x86_64-unknown-linux-gnu` | Linux desktop amd64, Docker amd64 |
+| `x86_64-pc-windows-msvc` | Windows 桌面（x64） |
+| `x86_64-apple-darwin` | Intel 芯片的 macOS |
+| `aarch64-apple-darwin` | Apple Silicon 的 macOS |
+| `x86_64-unknown-linux-gnu` | Linux 桌面 amd64、Docker amd64 |
 | `aarch64-unknown-linux-gnu` | Docker arm64 |
 
-The gateway checks that the current platform's entry point is in the package
-and refuses one that lacks it. Update checks match the asset name
-`<id>-<version>-<target>.zip` exactly, so the platform segment cannot be
-dropped from the filename.
+网关会检查当前平台的入口点是否存在于包中，缺失则拒绝安装。更新检查按资源名
+`<id>-<version>-<target>.zip` 精确匹配，所以文件名里的平台段不能省略。
 
-**Both Linux packages build against the bookworm generation.** The Docker
-runtime image is `debian:bookworm-slim` (glibc 2.36). A binary built on a newer
-distribution (Ubuntu 24.04, glibc 2.39) requires a newer glibc and fails inside
-the container with a dynamic-linker error. CI builds both Linux targets on
-Ubuntu 22.04 runners (glibc 2.35), which stays below the runtime image and
-therefore runs on it.
+**两个 Linux 包都基于 bookworm 这一代构建。** Docker 运行时镜像是
+`debian:bookworm-slim`（glibc 2.36）。在更新的发行版（如 Ubuntu 24.04，
+glibc 2.39）上构建出的二进制会要求更新的 glibc，在容器内会以动态链接器报错
+的方式失败。CI 在 Ubuntu 22.04 runner（glibc 2.35）上构建两个 Linux 目标，
+低于运行时镜像的要求，因此能在其上运行。
 
-## Signing (optional)
+## 签名（可选）
 
 ```bash
-node scripts/sign.mjs keygen                                    # once
+node scripts/sign.mjs keygen                                    # 执行一次
 node scripts/sign.mjs sign --zip dist/agent2api-providers-*.zip
 ```
 
-The private key goes to `~/.agent2api/plugin-signing-key.json` by default (or
-wherever `--key` / `AGENT2API_PLUGIN_KEY` points) and **never** enters the
-repository. Signing is ed25519 over the package contents — id, version,
-protocol, target, providers, entry points and the entry binary's sha256 — not
-over the zip bytes. After generating a key, put the printed public key into the
-gateway's `OFFICIAL_PUBKEYS` (`plugin_host/install.rs`); otherwise the gateway
-does not trust it and refuses the install as an invalid signature.
+私钥默认写到 `~/.agent2api/plugin-signing-key.json`（或 `--key` /
+`AGENT2API_PLUGIN_KEY` 指定的位置），**绝不**进入仓库。签名是对包内容做
+ed25519 签名 —— 包括 id、version、protocol、target、providers、入口点以及
+入口二进制的 sha256 —— 而不是对 zip 字节签名。生成密钥后，要把打印出的
+公钥放进网关的 `OFFICIAL_PUBKEYS`（`plugin_host/install.rs`）；否则网关
+不会信任它，会以签名无效为由拒绝安装。
 
-An unsigned package installs and works normally. The interface marks it
-"unsigned" in amber, which only means the origin cannot be proven.
+未签名的包也能正常安装和使用。界面会以琥珀色标注「unsigned」（未签名），
+这只表示无法证明来源。
 
-## Verifying
+## 验证
 
 ```bash
 cargo build --release
-node scripts/verify.mjs          # defaults to the binary under target/release
+node scripts/verify.mjs          # 默认使用 target/release 下的二进制
 node scripts/verify.mjs --exe path/to/agent2api-providers
 ```
 
-The script acts as the gateway and runs the protocol against the plugin binary:
-init, requests, streaming, backpressure, cancellation, callbacks and crash
-recovery. All 28 checks must pass.
+该脚本扮演网关角色，对插件二进制运行协议：init、请求、流式、背压、取消、
+回调以及崩溃恢复。全部 28 项检查必须通过。
 
-Every CI platform job runs it — **compiling is not the same as running**. A
-missing shared library, a missing executable bit or a wrong path only shows up
-at startup, so each platform's binary is started once on its own machine
-before the package is produced.
+CI 的每个平台 job 都会运行它 —— **能编译不等于能运行**。缺失的动态库、
+缺失的可执行权限位或错误路径，只有在启动时才会暴露，因此每个平台的二进制
+都会先在自己的机器上启动一次，之后才产出包。
 
-## The two shared crates
+## 两个共享 crate
 
-- `agent2api-provider-protocol` — the wire types (the contract); the gateway
-  and every plugin compile it
-- `agent2api-provider-sdk` — the `Provider` trait and the `serve()` loop
+- `agent2api-provider-protocol` —— 线上类型（协议契约）；网关与每个插件都会编译它
+- `agent2api-provider-sdk` —— `Provider` trait 与 `serve()` 循环
 
-Both live under `crates/` here, and `crates/providers/Cargo.toml` refers to
-them by relative path inside the workspace. A protocol change takes effect
-locally without a release.
+两者都在本仓库的 `crates/` 下，`crates/providers/Cargo.toml` 通过 workspace
+内的相对路径引用它们。协议改动在本地即可生效，无需发布。
 
-The gateway refers to the same repository **by tag**:
+网关则以 **tag** 方式引用同一个仓库：
 
 ```toml
 agent2api-provider-protocol = { git = "https://github.com/ProvidersPlugin/Agent2Providers", tag = "v0.2.0" }
 ```
 
-So a contract change reaches the gateway only after a new tag and an updated
-line there. Changing the local copy alone leaves the gateway compiling against
-the old contract; a field mismatch may still compile and fail at runtime.
+因此协议改动只有在打新 tag 并更新网关那行引用之后，才会到达网关。只改本地
+副本会让网关继续按旧契约编译；字段不匹配仍可能编译通过，但在运行时失败。
 
 ## License
 
